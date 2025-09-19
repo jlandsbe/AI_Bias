@@ -1,0 +1,21 @@
+experiment_dir: output/
+n_forward_steps: 121260
+forward_steps_in_memory: 10
+checkpoint_path: ckpt/ace2_era5_ckpt.tar
+logging:
+  log_to_screen: true
+  log_to_wandb: false
+  log_to_file: true
+  project: ace
+  entity: your_wandb_entity
+initial_condition:
+  path: initialization/1940_1_init.nc
+forcing_loader:
+  dataset:
+    data_path: forcing/
+  num_data_workers: 4
+data_writer:
+  save_prediction_files: true
+  save_monthly_files: false
+  names: ["surface_temperature",]
+
