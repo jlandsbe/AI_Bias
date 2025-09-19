@@ -47,6 +47,13 @@ era5_1990_1995 = xr.open_dataset("/barnes-engr-scratch1/DATA/ERA5/daily_temp/win
 era5_1985_1990 = xr.open_dataset("/barnes-engr-scratch1/DATA/ERA5/daily_temp/winter_1979_2025/combined_era5_winter_1985-1990.nc").rename({'valid_time': 'time'})
 era5_1980_1985 = xr.open_dataset("/barnes-engr-scratch1/DATA/ERA5/daily_temp/winter_1979_2025/combined_era5_winter_1980-1985.nc").rename({'valid_time': 'time'})
 keep_land_mask = xr.open_dataset("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/remove_poles_mask.nc").__xarray_dataarray_variable__
+
+mode = "pangu"
+
+#take asubset to only include 2017 or earlier
+era5_2015_2020_subsetted = era5_2015_2020.sel(time=slice("2015-01-01", "2020-12-31"))
+
+
 def percentile_filtering(data, percentile=-10):
     """
     Apply a percentile filter to the data.
@@ -81,15 +88,26 @@ def quantile_counter(da_list, quantiles, greater = 0, mask=None):
         name="num_quantiles"
     )
 
+if mode == "pangu":
+    da_list = [
+        era5_2015_2020_subsetted,
+        era5_2010_2015,
+        era5_2005_2010,
+        era5_2000_2005,
+        era5_1995_2000,
+        era5_1990_1995,
+        era5_1985_1990,
+        era5_1980_1985]
 
-da_list = [
-    era5_2010_2015,
-    era5_2005_2010,
-    era5_2000_2005,
-    era5_1995_2000,
-    era5_1990_1995,
-    era5_1985_1990,
-    era5_1980_1985]
+else:
+    da_list = [
+        era5_2010_2015,
+        era5_2005_2010,
+        era5_2000_2005,
+        era5_1995_2000,
+        era5_1990_1995,
+        era5_1985_1990,
+        era5_1980_1985]
 import os
 import xarray as xr
 
@@ -118,8 +136,8 @@ as_extreme = {}
 
 for p in range(-5, -96, -5):
     as_extreme[p] = quantile_counter(da_list, quantile_datasets[p], greater=0, mask=keep_land_mask)
-    as_extreme[p].to_netcdf(f"/home/jlandsbe/ai_weather_to_climate_ats780A8/ERA5_as_extreme_{abs(p)}th_below.nc")
+    as_extreme[p].to_netcdf(f"/home/jlandsbe/ai_weather_to_climate_ats780A8/ERA5_as_extreme_{abs(p)}th_below_{mode}.nc")
 
 for p in range(5, 100, 5):
     as_extreme[p] = quantile_counter(da_list, quantile_datasets[p], greater=1, mask=keep_land_mask)
-    as_extreme[p].to_netcdf(f"/home/jlandsbe/ai_weather_to_climate_ats780A8/ERA5_as_extreme_{abs(p)}th_above.nc")
+    as_extreme[p].to_netcdf(f"/home/jlandsbe/ai_weather_to_climate_ats780A8/ERA5_as_extreme_{abs(p)}th_above_{mode}.nc")

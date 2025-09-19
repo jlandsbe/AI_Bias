@@ -3,7 +3,13 @@ import numpy as np
 
 from matplotlib import font_manager as fm
 import matplotlib as mpl
-
+import matplotlib.pyplot as plt
+plt.rcParams.update({'font.size': 12})
+import numpy as np
+import xarray as xr
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from matplotlib.colors import ListedColormap, to_rgb
 # Path to your font files
 font_path_regular = "/home/jlandsbe/ai_weather_to_climate_ats780A8/Fonts/RedHatDisplay-VariableFont_wght.ttf"
 font_path_italic = "/home/jlandsbe/ai_weather_to_climate_ats780A8/Fonts/RedHatDisplay-Italic-VariableFont_wght.ttf"
@@ -44,6 +50,53 @@ def create_land_ocean_masks(filepath ='/home/jlandsbe/ai_weather_to_climate_ats7
         return xr.open_dataset("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/low_res_poles_mask.nc").__xarray_dataarray_variable__.values
     else:
         return no_mask
+
+def thresholded_mean(ds, var_name, percentile=0, months=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], start_year = 1940, end_year = 2025):
+    """
+    Calculate the yearly mean of a variable with optional thresholding by percentile and filtering by months.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Input dataset with dimensions including time, lat, lon (and optional sample).
+    var_name : str
+        Name of the variable in the dataset to process.
+    percentile : float
+        Percentile threshold for filtering.
+        - 0 = no thresholding
+        - positive = keep values above percentile
+        - negative = keep values below abs(percentile)
+    months : list of int
+        List of months to include in the calculation (default is all months).
+        
+    Returns
+    -------
+    xarray.DataArray
+        Resulting DataArray of shape (year, lat, lon)
+    """
+    # Extract the variable
+    da = ds[var_name]
+    
+    # Filter by specified months and years
+    da = da.where(da['time'].dt.month.isin(months), drop=True)
+    years = np.arange(start_year, end_year)
+    da = da.where(da['time'].dt.year.isin(years), drop=True)
+    if percentile == 0:
+    # No thresholding: simple mean over time
+        mean = da.mean(dim='time')
+    else:
+        # Compute threshold
+        thresh = da.quantile(abs(percentile) / 100, dim='time')
+        
+        if percentile > 0:
+            mask = da >= thresh
+        else:
+            mask = da <= thresh
+
+        # Mask and compute mean over time
+        masked = da.where(mask)
+        mean = masked.mean(dim='time')
+    return mean
 
 def thresholded_yearly_mean(ds, var_name, percentile=0, months=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], start_year = 1940, end_year = 2025, chunk_size = 1):
     """
@@ -108,10 +161,6 @@ def thresholded_yearly_mean(ds, var_name, percentile=0, months=[1, 2, 3, 4, 5, 6
             # Mask and compute mean over time
             masked = data.where(mask)
             mean = masked.mean(dim='time')
-        print(mean)
-        if 'sample' in data.dims:
-            mean = mean.mean(dim='sample')
-        print(mean)
         # Attach year coordinate
         mean = mean.expand_dims(year=[y])
         results.append(mean)
@@ -120,12 +169,7 @@ def thresholded_yearly_mean(ds, var_name, percentile=0, months=[1, 2, 3, 4, 5, 6
     result = xr.concat(results, dim='year')
     return result
 
-import matplotlib.pyplot as plt
-import numpy as np
-import xarray as xr
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-from matplotlib.colors import ListedColormap, to_rgb
+
 def make_custom_colormap(low_color="#FE5F55", mid_color="#FCDFA6", high_color="#4CB963", n_colors=4, power=2.0):
     """
     Creates a custom colormap with more gradation at the high end.
@@ -312,7 +356,7 @@ def time_series_plot(xlabels, ydata, ylabel, title, tag, vmin=None, vmax=None, a
         ax.plot(xlabels[i], value, marker='o', color=color, markersize=12, label=label)
         
         # Add annotation in same color, slightly offset vertically
-        ax.text(xlabels[i], value + 0.04, f"{value:.2f}", color=color, fontsize=10, ha='center', weight = 'bold')
+        ax.text(xlabels[i], value + 0.04, f"{value:.2f}", color=color, fontsize=12, ha='center', weight = 'bold')
 
 
     ax.legend(loc='upper right', fontsize=12)
@@ -328,110 +372,194 @@ def time_series_plot(xlabels, ydata, ylabel, title, tag, vmin=None, vmax=None, a
     plt.tight_layout()
     plt.savefig(f"/home/jlandsbe/ai_weather_to_climate_ats780A8/output_figures/{tag}.png", bbox_inches='tight', dpi=300)
 
-def plot_trend_map(thresholded_data, cmap='RdBu_r', vmin=None, vmax=None, title="Trend per Grid Point", save_name="", rectangles=None):
-    """
-    Compute and plot the linear trend at each grid point using Cartopy.
-
-    Parameters
-    ----------
-    thresholded_data : xarray.DataArray
-        DataArray with dimensions (year, lat, lon).
-    cmap : str
-        Colormap for plotting.
-    vmin, vmax : float or None
-        Limits for the color scale.
-    title : str
-        Title of the plot.
-    save_name : str
-        Name for saving the plot.
-    rectangles : list of dict or None
-        List of rectangles to plot, where each rectangle is defined as a dictionary with keys:
-        - 'lon_min', 'lon_max', 'lat_min', 'lat_max' for the rectangle bounds.
-        - 'color' (optional) for the rectangle edge color.
-        - 'label' (optional) for the rectangle label.
-    """
 
 
-    if len(np.shape(thresholded_data))>2:
-        slope_map = thresholded_data.mean(dim='year')
+
+
+def plot_trend_map(data, variable="t2m", title="", cmap='RdBu_r', maskout=True, vmin=None, vmax=None, save_name="", time_mean=False, emd=False, trend=False, quantile=False, rectangles=None):
+    fig, ax = plt.subplots(figsize=(10, 6), subplot_kw={'projection': ccrs.EqualEarth()})
+        # Find difference between FourCastNet and ERA5 
+    if isinstance(data, xr.Dataset):
+        if time_mean:
+            plot_data = data[variable].mean(dim='time', skipna=True)
+        else:
+            plot_data = data[variable]
+    elif isinstance(data, xr.DataArray):
+        if time_mean:
+            plot_data = data.mean(dim='time', skipna=True)
+        else:
+            plot_data = data
     else:
-        slope_map = thresholded_data
+        raise ValueError("Input must be an xarray.Dataset or xarray.DataArray")
+    # Find difference between FourCastNet and ERA5
 
-    ocean_maskout = create_land_ocean_masks(maskout_type="ocean")
-    slope_map = slope_map*ocean_maskout
-    print("ocean masked out")
+    if maskout:
+        ocean_maskout = create_land_ocean_masks(maskout_type="ocean")
+        plot_data = plot_data*ocean_maskout
+    #weight by cosing of latitude and calculate mean
+    weights = np.cos(np.deg2rad(plot_data.lat))
+    weights.name = "weights"
+    difference_weighted = plot_data.weighted(weights)
+    mean_diff = difference_weighted.mean(dim=('lat','lon')).values
+    #plot the difference
+    im = plot_data.plot(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax, add_colorbar=False,transform=ccrs.PlateCarree())
+    cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, aspect=50)
+    ax.set_title(title, fontsize=16)
+    if emd:
+        cbar.set_label("EMD", fontsize=12)
+        text_str = f"Mean: {mean_diff:.2f}"
+    elif trend:
+        cbar.set_label("Trend (K/5 years)", fontsize=12)
+        text_str = f"Mean: {mean_diff:.3f} K/year"
+    elif quantile:
+        cbar.set_label(r"% of Data as Extreme", fontsize=12)
+        text_str = f"Mean: {mean_diff:.2f} %"
+    else:
+        cbar.set_label(f"Temperature Difference from ERA5", fontsize=12)
+        text_str = f"Mean: {mean_diff:.2f} K"
 
-    ##calculate mean value over all land, weighted by cosine of latitude:
-    weights = np.cos(np.deg2rad(slope_map['lat']))
-    weighted_mean = slope_map.weighted(weights).mean(dim=['lat', 'lon'], skipna=True)
-    mean_value = weighted_mean
 
-    # Plot
-    fig = plt.figure(figsize=(14, 6), dpi=300)
-    ax = plt.axes(projection=ccrs.EqualEarth())
 
-    # Set color limits if not provided
-    if vmin is None:
-        vmin = np.nanpercentile(slope_map, 5)
-    if vmax is None:
-        vmax = np.nanpercentile(slope_map, 95)
-
-    #lim = max(abs(vmin), abs(vmax))
-
-    im = slope_map.plot(
-        ax=ax,
-        transform=ccrs.PlateCarree(),
-        cmap=cmap,
-        vmin=vmin,
-        vmax=vmax,
-        cbar_kwargs={"label": "Degrees (K)"}
-    )
-
-    # Add coastlines and features
+    ax.set_global()
     ax.coastlines()
-    ax.add_feature(cfeature.LAND, facecolor='white', edgecolor='black')
+    ax.add_feature(cfeature.BORDERS, linestyle=":")
+    ax.add_feature(cfeature.LAND, facecolor="white")
+    ax.add_feature(cfeature.OCEAN, facecolor="white")
 
-    # Plot rectangles if provided
-    if rectangles:
-        for rect in rectangles:
-            lon_min = rect['lon_min']
-            lon_max = rect['lon_max']
-            lat_min = rect['lat_min']
-            lat_max = rect['lat_max']
-            color = rect.get('color', 'springgreen')
-            label = rect.get('label', None)
 
-            # Plot rectangle
-            ax.add_patch(plt.Rectangle(
-                (lon_min, lat_min),
-                lon_max - lon_min,
-                lat_max - lat_min,
-                linewidth=4,
-                edgecolor=color,
-                facecolor='none',
-                transform=ccrs.PlateCarree()
-            ))
+    # Add annotation over Southern Ocean (centered above Antarctica)
+    ax.text(0, -60, text_str, transform=ccrs.PlateCarree(),
+            ha='center', va='center', fontsize=14, color='black',
+            bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+    
+        # 🔲 Draw box if specified: highlight_box = (lat_min, lat_max, lon_min, lon_max)
+    if rectangles is not None:
+        if isinstance(rectangles[0], (list, tuple)):  # multiple boxes
+            boxes = rectangles
+        else:  # single box
+            boxes = [rectangles]
 
-            # Add label if provided
-            if label:
-                ax.text(
-                    (lon_min + lon_max) / 2,
-                    lat_max,
-                    label,
-                    color='black',
-                    fontsize=10,
-                    ha='center',
-                    va='center',
-                    transform=ccrs.PlateCarree(),
-                    bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.3')
-                )
-    title = f"{title} (Mean Value: {mean_value:.2f} K)"
-    ax.set_title(title, fontsize=14)
-    plt.tight_layout()
-    plt.show()
-    plt.savefig("/home/jlandsbe/ai_weather_to_climate_ats780A8/output_figures/value_map_" + save_name, dpi=300)
-    print(slope_map)
-    return slope_map
+        for box in boxes:
+            lat_min, lat_max, lon_min, lon_max = box
+            box_lats = [lat_min, lat_max, lat_max, lat_min, lat_min]
+            box_lons = [lon_min, lon_min, lon_max, lon_max, lon_min]
+            ax.plot(box_lons, box_lats, color='black', linewidth=2,
+                    transform=ccrs.PlateCarree(), zorder=10)
+    plt.savefig(f"/home/jlandsbe/ai_weather_to_climate_ats780A8/output_figures/mean_{save_name}.png", bbox_inches='tight', dpi=300)
+    return plot_data
+
+# def plot_trend_map(thresholded_data, cmap='RdBu_r', vmin=None, vmax=None, title="Trend per Grid Point", save_name="", rectangles=None):
+#     """
+#     Compute and plot the linear trend at each grid point using Cartopy.
+
+#     Parameters
+#     ----------
+#     thresholded_data : xarray.DataArray
+#         DataArray with dimensions (year, lat, lon).
+#     cmap : str
+#         Colormap for plotting.
+#     vmin, vmax : float or None
+#         Limits for the color scale.
+#     title : str
+#         Title of the plot.
+#     save_name : str
+#         Name for saving the plot.
+#     rectangles : list of dict or None
+#         List of rectangles to plot, where each rectangle is defined as a dictionary with keys:
+#         - 'lon_min', 'lon_max', 'lat_min', 'lat_max' for the rectangle bounds.
+#         - 'color' (optional) for the rectangle edge color.
+#         - 'label' (optional) for the rectangle label.
+#     """
+
+
+#     if len(np.shape(thresholded_data))>2:
+#         slope_map = thresholded_data.mean(dim='year')
+#     else:
+#         slope_map = thresholded_data
+
+#     ocean_maskout = create_land_ocean_masks(maskout_type="ocean")
+#     slope_map = slope_map*ocean_maskout
+#     print("ocean masked out")
+
+#     ##calculate mean value over all land, weighted by cosine of latitude:
+#     weights = np.cos(np.deg2rad(slope_map['lat']))
+#     weighted_mean = slope_map.weighted(weights).mean(dim=['lat', 'lon'], skipna=True)
+#     mean_value = weighted_mean
+
+#     # Plot
+#     fig = plt.figure(figsize=(14, 6), dpi=300)
+#     ax = plt.axes(projection=ccrs.EqualEarth())
+
+#     # Set color limits if not provided
+#     if vmin is None:
+#         vmin = np.nanpercentile(slope_map, 5)
+#     if vmax is None:
+#         vmax = np.nanpercentile(slope_map, 95)
+
+#     #lim = max(abs(vmin), abs(vmax))
+
+#     im = slope_map.plot(
+#     ax=ax,
+#     transform=ccrs.PlateCarree(),
+#     cmap=cmap,
+#     vmin=vmin,
+#     vmax=vmax,
+#     cbar_kwargs={"label": "Degrees (K)"}
+# )
+
+#     # Change label font size
+#     im.colorbar.ax.set_ylabel("Degrees (K)", fontsize=12)
+
+#     # Change tick font size
+#     im.colorbar.ax.tick_params(labelsize=10)
+
+#     # Add coastlines and features
+#     ax.coastlines()
+#     ax.add_feature(cfeature.LAND, facecolor='white', edgecolor='black')
+#     ax.text(0, -60, f"Mean: {mean_value:.2f} K", transform=ccrs.PlateCarree(),
+#             ha='center', va='center', fontsize=14, color='black',
+#             bbox=dict(facecolor='white', edgecolor='none', alpha=0.7))
+#     # Plot rectangles if provided
+#     if rectangles:
+#         for rect in rectangles:
+#             lon_min = rect['lon_min']
+#             lon_max = rect['lon_max']
+#             lat_min = rect['lat_min']
+#             lat_max = rect['lat_max']
+#             color = rect.get('color', 'springgreen')
+#             label = rect.get('label', None)
+
+#             # Plot rectangle
+#             ax.add_patch(plt.Rectangle(
+#                 (lon_min, lat_min),
+#                 lon_max - lon_min,
+#                 lat_max - lat_min,
+#                 linewidth=4,
+#                 edgecolor=color,
+#                 facecolor='none',
+#                 transform=ccrs.PlateCarree()
+#             ))
+
+#             # Add label if provided
+#             if label:
+#                 ax.text(
+#                     (lon_min + lon_max) / 2,
+#                     lat_max,
+#                     label,
+#                     color='black',
+#                     fontsize=10,
+#                     ha='center',
+#                     va='center',
+#                     transform=ccrs.PlateCarree(),
+#                     bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.3')
+#                 )
+#     title = f"{title}"
+#     ax.set_title(title, fontsize=16)
+#     plt.tight_layout()
+#     plt.show()
+#     plt.savefig("/home/jlandsbe/ai_weather_to_climate_ats780A8/output_figures/ace_bias_map_" + save_name, dpi=300)
+#     print(slope_map)
+#     return slope_map
 
 era5_aligned = xr.open_dataset("/home/jlandsbe/ai_weather_to_climate_ats780A8/input_data/ERA5_processed.nc")
 ace2_aligned = xr.open_dataset("/home/jlandsbe/ai_weather_to_climate_ats780A8/input_data/ACE2_processed.nc")
@@ -469,10 +597,17 @@ ace2_first_member = ace2_aligned.isel(sample=0)
 
 # Define time periods and percentiles
 time_periods = [(1951,1966),(1966,1981),(1981,1996),(1996,2011)]
-percentiles = [0,]
-take_mean_across_samples = 1
+percentiles = [0,-10, 90]
+season = "winter"
+if season =="winter":
+    months_to_include = [6,7,8]
+elif season == "year-round":
+    months_to_include = [1,2,3,4,5,6,7,8,9,10,11,12]
+else:
+    months_to_include = [1,2,12]
+    season = "winter"
 
-# Storage for results if needed later
+#Storage for results if needed later
 results = {}
 
 # Loop through periods and percentiles
@@ -483,24 +618,18 @@ for start_year, end_year in time_periods:
     for percentile in percentiles:
         percentile_label = (
             "all_vals" if percentile == 0 else
-            "10th_vals" if percentile == -10 else
-            "90th_vals"
+            str(abs(percentile)) + "th_percentile"
         )
 
         # Compute thresholded yearly means
-        era5_vals = thresholded_yearly_mean(
+        era5_vals = thresholded_mean(
             era5_aligned, 'surface_temperature',
-            percentile=percentile, start_year=start_year, end_year=end_year,
-            chunk_size=1, months=[1, 2, 12]
+            percentile=percentile, start_year=start_year, end_year=end_year, months=months_to_include
         )
-        ace2_vals = thresholded_yearly_mean(
+        ace2_vals = thresholded_mean(
             ace2_aligned, 'surface_temperature',
-            percentile=percentile, start_year=start_year, end_year=end_year,
-            chunk_size=1, months=[1, 2, 12]
+            percentile=percentile, start_year=start_year, end_year=end_year, months=months_to_include
         )
-        if take_mean_across_samples:
-            print(ace2_vals)
-            #ace2_vals = ace2_vals.mean(dim='sample')
         # Save results if needed later
         results[period_label][percentile_label] = (era5_vals, ace2_vals)
         # title_percentile = (
@@ -516,12 +645,13 @@ for start_year, end_year in time_periods:
         # )
 
 target_period_ace_test = "1996_to_2011"
-target_percentile = "all_vals"
+target_percentile_list = ["all_vals", "10th_percentile", "90th_percentile"]
 diff_list = []
 diff_list_means = []
 
 # Extract ace2_vals for the target period
-target_ace2 = results[target_period_ace_test][target_percentile][1]
+target_ace2 = results[target_period_ace_test]["all_vals"][1]
+target_ace2 = target_ace2.mean(dim="sample")
 
 # Build list of diffs in the same order as time_periods
 ordered_periods = [
@@ -533,7 +663,7 @@ ordered_periods = [
 
 
 for period in ordered_periods:
-    era5_vals = results[period][target_percentile][0]
+    era5_vals = results[period]["all_vals"][0]
     map_data = target_ace2 - era5_vals
     diff_list.append(map_data)
     ocean_maskout = create_land_ocean_masks(maskout_type="ocean")
@@ -543,6 +673,23 @@ for period in ordered_periods:
     weighted = map_data.weighted(weights)
     mean_diff = weighted.mean(dim=('lat', 'lon')).values
     diff_list_means.append(mean_diff)
+
+
+for target_percentile in target_percentile_list:
+    target_ace2 = results[target_period_ace_test][target_percentile][1]
+    target_era5 = results[target_period_ace_test][target_percentile][0]
+    bias_map = target_ace2 - target_era5
+    bias_map = bias_map.mean(dim="sample")
+    if target_percentile == "all_vals":
+        title = "ACE2 Mean Temperature Difference (1996-2010)"
+    elif target_percentile == "10th_percentile":
+        title = "ACE2 10th Percentile Temperature Difference (1996-2010)"
+    else:
+        title = "ACE2 90th Percentile Temperature Difference (1996-2010)"
+    print(title)
+    plot_trend_map(bias_map, cmap='RdBu_r', vmin=-2, vmax=2, title=title, save_name=f"ace2_{season}_months_{target_percentile}_mean_map.png")
+
+
 
 print("Mean differences for each period:", diff_list_means)
 # Assume you have a list of DataArrays with the same lat/lon dims
@@ -563,8 +710,44 @@ min_index = stacked_filled.argmin(dim='index')
 # Set index to NaN where all were NaN
 min_index = min_index.where(~all_nan_mask)
 
-plot_emd_years(min_index, variable="surface_temperature", title="ACE2 Best Matching Time Periods",
-               maskout="Ocean", vmin=0, vmax=3, tag="best_matching_time_period_surface_temperature_ace")
+plot_emd_years(min_index, variable="surface_temperature", title=f"ACE2 {season.capitalize()} Best Matching Time Periods",
+               maskout="Ocean", vmin=0, vmax=3, tag=f"best_matching_time_period_surface_temperature_ace_{season}")
+xlabs = ['1951-1965','1966-1980','1981-1995','1996-2010']
+time_series_plot(xlabels=xlabs, ydata=diff_list_means, ylabel="Mean Difference (K)", title=f"ACE {season.capitalize()} Absolute Global Mean Temperature Difference", tag=f"ace_{season}_time_series_mean_diff_abs", abs=1, vmax=1)
+
+
+##era5 test
+
+early_era5_summer = thresholded_mean(era5_aligned, 'surface_temperature', percentile=0, start_year=1940, end_year=1979, months=[6,7,8])
+early_era5_winter = thresholded_mean(era5_aligned, 'surface_temperature', percentile=0, start_year=1940, end_year=1979, months=[1,2,12])
+early_era5_winter_10 = thresholded_mean(era5_aligned, 'surface_temperature', percentile=-10, start_year=1940, end_year=1979, months=[1,2,12])
+early_era5_winter_90 = thresholded_mean(era5_aligned, 'surface_temperature', percentile=90, start_year=1940, end_year=1979, months=[1,2,12])
+late_era5_summer = thresholded_mean(era5_aligned, 'surface_temperature', percentile=0, start_year=1980, end_year=2022, months=[6,7,8])
+late_era5_winter = thresholded_mean(era5_aligned, 'surface_temperature', percentile=0, start_year=1980, end_year=2022, months=[1,2,12])
+late_era5_winter_10 = thresholded_mean(era5_aligned, 'surface_temperature', percentile=-10, start_year=1980, end_year=2022, months=[1,2,12])
+late_era5_winter_90 = thresholded_mean(era5_aligned, 'surface_temperature', percentile=90, start_year=1980, end_year=2022, months=[1,2,12])
+early_era5_year_round = thresholded_mean(era5_aligned, 'surface_temperature', percentile=0, start_year=1940, end_year=1979, months=[1,2,3,4,5,6,7,8,9,10,11,12])
+late_era5_year_round = thresholded_mean(era5_aligned, 'surface_temperature', percentile=0, start_year=1980, end_year=2022, months=[1,2,3,4,5,6,7,8,9,10,11,12])
+year_round_diff = late_era5_year_round - early_era5_year_round
+summer_diff = late_era5_summer - early_era5_summer
+winter_diff = late_era5_winter - early_era5_winter
+winter_diff_10 = late_era5_winter_10 - early_era5_winter_10
+winter_diff_90 = late_era5_winter_90 - early_era5_winter_90
+###plotting these and their differences
+plot_trend_map(summer_diff, cmap='RdBu_r', vmin=-2.25, vmax=2.25, title="ERA5 Change in Mean Summer Temperature", save_name="ace_summer_era5_climate_change.png")
+plot_trend_map(winter_diff, cmap='RdBu_r', vmin=-2.25, vmax=2.25, title="ERA5 Change in Mean Winter Temperature", save_name="ace_winter_era5_climate_change.png")
+plot_trend_map(winter_diff_10 - winter_diff_90, cmap='RdBu_r', vmin=-2.25, vmax=2.25, title="ERA5 Change in Winter 10th vs 90th Percentile Temperature", save_name="ace_winter_10th_vs_90th_percentile_era5_climate_change.png")
+plot_trend_map(year_round_diff, cmap='RdBu_r', vmin=-2.25, vmax=2.25, title="ERA5 Change in Mean Year-Round Temperature", save_name="ace_year_round_era5_climate_change.png")
+plot_trend_map(summer_diff - year_round_diff, cmap='RdBu_r', vmin=-.5, vmax=.5, title="ERA5 Relative Summer Seasonal Change in Temperature", save_name="ace_relative_summer_era5_climate_change.png")
+plot_trend_map(winter_diff - year_round_diff, cmap='RdBu_r', vmin=-.5, vmax=.5, title="ERA5 Relative Winter Seasonal Change in Temperature", save_name="ace_relative_winter_era5_climate_change.png")
+#plot_trend_map(winter_diff - summer_diff, cmap='RdBu_r', vmin=-.5, vmax=.5, title="Relative Winter vs. Summer Seasonal Change in Temps", save_name="winter_summer_comparison_climate_change.png")
+
+
+
+
+
+
+
 
 
 
