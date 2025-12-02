@@ -124,7 +124,7 @@ def make_custom_colormap(low_color="#FE5F55", mid_color="#FCDFA6", high_color="#
 
 def plot_emd_years(data, low_color="#FE5F55", mid_color="#FCDFA6", high_color="#4CB963",
                    n_colors=9, variable=None, title="", maskout=None, vmin=None, vmax=None,
-                   tag="", time_mean=False):
+                   tag="", time_mean=False, coarsen=True, pvals=None):
 
 
     cmap = make_custom_colormap(low_color, mid_color, high_color, n_colors)
@@ -160,7 +160,12 @@ def plot_emd_years(data, low_color="#FE5F55", mid_color="#FCDFA6", high_color="#
 
     # Apply mask if provided
     if maskout is not None:
+        print(np.shape((maskout)))
+        print(np.shape((plot_data)))
+        # if coarsen:
+        #     maskout = maskout.coarsen(latitude=4, longitude=4, boundary='trim').mean()
         plot_data = plot_data * maskout
+        print(np.shape(plot_data))
 
     print("Min:", plot_data.min().values)
     print("Max:", plot_data.max().values)
@@ -196,7 +201,9 @@ def plot_emd_years(data, low_color="#FE5F55", mid_color="#FCDFA6", high_color="#
     weights_us.name = "weights"
     weighted_us = plot_data_us.weighted(weights_us)
     mean_contiguous_us = weighted_us.mean(dim=('latitude', 'longitude')).values
-
+    if coarsen:
+        print("boundary")
+        plot_data = plot_data.coarsen(latitude=4, longitude=4, boundary='trim').mean()
     # Plot the data
     im = plot_data.plot(
     ax=ax,
@@ -206,8 +213,31 @@ def plot_emd_years(data, low_color="#FE5F55", mid_color="#FCDFA6", high_color="#
     add_colorbar=False,
     transform=ccrs.PlateCarree()  # <--- This is crucial!
 )
+    if pvals is not None:
+        if pvals.shape != plot_data.shape:
+            raise ValueError("pvals must have same shape as data being plotted.")
 
+        sig_mask = pvals < 0.1
 
+        # Convert mask → coordinates
+        y_idx, x_idx = np.where(sig_mask)
+
+        # Get actual lon/lat arrays
+        lats = plot_data.latitude.values
+        lons = plot_data.longitude.values
+
+        # Stipple
+        ax.scatter(
+            lons[x_idx],
+            lats[y_idx],
+            s=1,
+            c='k',
+            alpha=0.5,
+            linewidths=0,
+            transform=ccrs.PlateCarree(),
+            zorder=10
+        )
+    
     # Colorbar setup
     tick_positions = np.arange(n_colors) + 0.5  # centers of color patches
     tick_labels = ['1980-1985', '1985-1990', '1990-1995', '1995-2000', '2000-2005', '2005-2010', '2010-2015', '2015-2020', '2020-2025']
@@ -261,7 +291,7 @@ def plot_emd_years(data, low_color="#FE5F55", mid_color="#FCDFA6", high_color="#
 
 
 
-def plot_basic(data, variable, title="", cmap='RdBu_r', maskout=None, vmin=None, vmax=None, tag="", time_mean=True, emd=False, trend=False, quantile=False, highlight_box=None):
+def plot_basic(data, variable, title="", cmap='RdBu_r', maskout=None, vmin=None, vmax=None, tag="", time_mean=True, emd=False, trend=False, quantile=False, highlight_box=None, pvals=None):
     fig, ax = plt.subplots(figsize=(10, 6), subplot_kw={'projection': ccrs.EqualEarth()})
         # Find difference between FourCastNet and ERA5 
     if isinstance(data, xr.Dataset):
@@ -287,6 +317,30 @@ def plot_basic(data, variable, title="", cmap='RdBu_r', maskout=None, vmin=None,
     mean_diff = difference_weighted.mean(dim=('latitude','longitude')).values
     #plot the difference
     im = plot_data.plot(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax, add_colorbar=False,transform=ccrs.PlateCarree())
+    if pvals is not None:
+        if pvals.shape != plot_data.shape:
+            raise ValueError("pvals must have same shape as data being plotted.")
+
+        sig_mask = pvals < 0.1
+
+        # Convert mask → coordinates
+        y_idx, x_idx = np.where(sig_mask)
+
+        # Get actual lon/lat arrays
+        lats = plot_data.latitude.values
+        lons = plot_data.longitude.values
+
+        # Stipple
+        ax.scatter(
+            lons[x_idx],
+            lats[y_idx],
+            s=1,
+            c='k',
+            alpha=0.5,
+            linewidths=0,
+            transform=ccrs.PlateCarree(),
+            zorder=10
+        )
     cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, aspect=50)
     ax.set_title(title, fontsize=16)
     if emd:
@@ -332,7 +386,7 @@ def plot_basic(data, variable, title="", cmap='RdBu_r', maskout=None, vmin=None,
     plt.savefig(f"/home/jlandsbe/ai_weather_to_climate_ats780A8/output_figures/mean_{tag}.png", bbox_inches='tight', dpi=300)
     return plot_data, mean_diff
 
-def plot_comparison(fourcast, era5, variable, title="", cmap='RdBu_r', maskout=None, vmin=None, vmax=None, tag="", highlight_box=None):
+def plot_comparison(fourcast, era5, variable, title="", cmap='RdBu_r', maskout=None, vmin=None, vmax=None, tag="", highlight_box=None, coarsen=True, pvals=None):
     fig, ax = plt.subplots(figsize=(10, 6), subplot_kw={'projection': ccrs.EqualEarth()})
     
     # Find difference between FourCastNet and ERA5
@@ -351,7 +405,33 @@ def plot_comparison(fourcast, era5, variable, title="", cmap='RdBu_r', maskout=N
     difference_weighted = fourcast_minus_era5.weighted(weights)
     mean_diff = difference_weighted.mean(dim=('latitude','longitude')).values
     #plot the difference
-    im = fourcast_minus_era5.plot(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax, add_colorbar=False, transform=ccrs.PlateCarree())
+    if coarsen: 
+        fourcast_minus_era5_plot = fourcast_minus_era5.coarsen(latitude=4, longitude=4, boundary='trim').mean()
+    im = fourcast_minus_era5_plot.plot(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax, add_colorbar=False, transform=ccrs.PlateCarree())
+    if pvals is not None:
+        if pvals.shape != fourcast_minus_era5_plot.shape:
+            raise ValueError("pvals must have same shape as data being plotted.")
+
+        sig_mask = pvals < 0.1
+
+        # Convert mask → coordinates
+        y_idx, x_idx = np.where(sig_mask)
+
+        # Get actual lon/lat arrays
+        lats = fourcast_minus_era5_plot.latitude.values
+        lons = fourcast_minus_era5_plot.longitude.values
+
+        # Stipple
+        ax.scatter(
+            lons[x_idx],
+            lats[y_idx],
+            s=1,
+            c='k',
+            alpha=0.5,
+            linewidths=0,
+            transform=ccrs.PlateCarree(),
+            zorder=10
+        )
     cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, aspect=50)
     cbar.set_label(f"{variable} Difference from ERA5", fontsize=12)
     ax.set_title(title, fontsize=16)
@@ -372,12 +452,13 @@ def plot_comparison(fourcast, era5, variable, title="", cmap='RdBu_r', maskout=N
             boxes = highlight_box
         else:  # single box
             boxes = [highlight_box]
-
-        for box in boxes:
+        color = '#FFBC42'
+        colors = ['black', '#FFBC42']
+        for c, box in enumerate(boxes):
             lat_min, lat_max, lon_min, lon_max = box
             box_lats = [lat_min, lat_max, lat_max, lat_min, lat_min]
             box_lons = [lon_min, lon_min, lon_max, lon_max, lon_min]
-            ax.plot(box_lons, box_lats, color='#FFBC42', linewidth=2,
+            ax.plot(box_lons, box_lats, color=colors[c], linewidth=2,
                     transform=ccrs.PlateCarree(), zorder=10)
     print(f"saving figure with tag: {tag}")
     plt.savefig(f"/home/jlandsbe/ai_weather_to_climate_ats780A8/output_figures/mean_fourcast_era5_comparison_{tag}.png", bbox_inches='tight', dpi=300)
@@ -629,185 +710,211 @@ plot_emd_years(min_index, variable="t2m", title="Persistence",
                maskout=keep_land_mask, vmin=0, vmax=8, tag="best_matching_time_period_t2m_persist")
 
 
-mean_diff_2020_2025, total_diff_2020_2025 = plot_comparison(fourcast_9day, era5_2020_2025, "t2m", title="FourCastNet 9-day", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2020_2025_mean")
-mean_diff_2015_2020, total_diff_2015_2020 = plot_comparison(fourcast_9day, era5_2015_2020, "t2m", title="FourCastNet 9-day Mean 2mT Difference (2015-2020)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2015_2020_mean")
-mean_diff_2010_2015, total_diff_2010_2015 = plot_comparison(fourcast_9day, era5_2010_2015, "t2m", title="FourCastNet 9-day Mean 2mT Difference (2010-2015)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2010_2015_mean")
-mean_diff_2005_2010, total_diff_2005_2010 = plot_comparison(fourcast_9day, era5_2005_2010, "t2m", title="FourCastNet 9-day Mean 2mT Difference (2005-2010)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2005_2010_mean")
-mean_diff_2000_2005, total_diff_2000_2005 = plot_comparison(fourcast_9day, era5_2000_2005, "t2m", title="FourCastNet 9-day Mean 2mT Difference (2000-2005)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2000_2005_mean")
-mean_diff_1995_2000, total_diff_1995_2000 = plot_comparison(fourcast_9day, era5_1995_2000, "t2m", title="FourCastNet 9-day Mean 2mT Difference (1995-2000)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_1995_2000_mean")
-mean_diff_1990_1995, total_diff_1990_1995 = plot_comparison(fourcast_9day, era5_1990_1995, "t2m", title="FourCastNet 9-day Mean 2mT Difference (1990-1995)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_1990_1995_mean")
-mean_diff_1985_1990, total_diff_1985_1990 = plot_comparison(fourcast_9day, era5_1985_1990, "t2m", title="FourCastNet 9-day Mean 2mT Difference (1985-1990)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_1985_1990_mean")
-mean_diff_1980_1985, total_diff_1980_1985 = plot_comparison(fourcast_9day, era5_1980_1985, "t2m", title="FourCastNet 9-day Mean 2mT Difference (1980-1985)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_1980_1985_mean")
 
-# Pangu 9-day lead comparisons
-pangu_mean_diff_2020_2025, pangu_total_diff_2020_2025 = plot_comparison(pangu_9day, era5_2020_2025, "t2m", title="Pangu 9-day", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2020_2025_mean")
-pangu_mean_diff_2015_2020, pangu_total_diff_2015_2020 = plot_comparison(pangu_9day, era5_2015_2020, "t2m", title="Pangu 9-day Mean 2mT Difference (2015-2020)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2015_2020_mean")
-pangu_mean_diff_2010_2015, pangu_total_diff_2010_2015 = plot_comparison(pangu_9day, era5_2010_2015, "t2m", title="Pangu 9-day Mean 2mT Difference (2010-2015)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2010_2015_mean")
-pangu_mean_diff_2005_2010, pangu_total_diff_2005_2010 = plot_comparison(pangu_9day, era5_2005_2010, "t2m", title="Pangu 9-day Mean 2mT Difference (2005-2010)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2005_2010_mean")
-pangu_mean_diff_2000_2005, pangu_total_diff_2000_2005 = plot_comparison(pangu_9day, era5_2000_2005, "t2m", title="Pangu 9-day Mean 2mT Difference (2000-2005)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2000_2005_mean")
-pangu_mean_diff_1995_2000, pangu_total_diff_1995_2000 = plot_comparison(pangu_9day, era5_1995_2000, "t2m", title="Pangu 9-day Mean 2mT Difference (1995-2000)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_1995_2000_mean")
-pangu_mean_diff_1990_1995, pangu_total_diff_1990_1995 = plot_comparison(pangu_9day, era5_1990_1995, "t2m", title="Pangu 9-day Mean 2mT Difference (1990-1995)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_1990_1995_mean")
-pangu_mean_diff_1985_1990, pangu_total_diff_1985_1990 = plot_comparison(pangu_9day, era5_1985_1990, "t2m", title="Pangu 9-day Mean 2mT Difference (1985-1990)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_1985_1990_mean")
-pangu_mean_diff_1980_1985, pangu_total_diff_1980_1985 = plot_comparison(pangu_9day, era5_1980_1985, "t2m", title="Pangu 9-day Mean 2mT Difference (1980-1985)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_1980_1985_mean")
+land_mask_coarsened = keep_land_mask.coarsen(latitude=4, longitude=4, boundary='trim').mean()
 
-# Pangu 2-day lead comparisons
-pangu_mean_diff_2020_2025_2day, pangu_total_diff_2020_2025_2day = plot_comparison(pangu_2day, era5_2020_2025, "t2m", title="Pangu 2-day", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2020_2025_mean")
-pangu_mean_diff_2015_2020_2day, pangu_total_diff_2015_2020_2day = plot_comparison(pangu_2day, era5_2015_2020, "t2m", title="Pangu 2-day Mean 2mT Difference (2015-2020)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2015_2020_mean")
-pangu_mean_diff_2010_2015_2day, pangu_total_diff_2010_2015_2day = plot_comparison(pangu_2day, era5_2010_2015, "t2m", title="Pangu 2-day Mean 2mT Difference (2010-2015)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2010_2015_mean")
-pangu_mean_diff_2005_2010_2day, pangu_total_diff_2005_2010_2day = plot_comparison(pangu_2day, era5_2005_2010, "t2m", title="Pangu 2-day Mean 2mT Difference (2005-2010)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2005_2010_mean")
-pangu_mean_diff_2000_2005_2day, pangu_total_diff_2000_2005_2day = plot_comparison(pangu_2day, era5_2000_2005, "t2m", title="Pangu 2-day Mean 2mT Difference (2000-2005)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2000_2005_mean")
-pangu_mean_diff_1995_2000_2day, pangu_total_diff_1995_2000_2day = plot_comparison(pangu_2day, era5_1995_2000, "t2m", title="Pangu 2-day Mean 2mT Difference (1995-2000)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_1995_2000_mean")
-pangu_mean_diff_1990_1995_2day, pangu_total_diff_1990_1995_2day = plot_comparison(pangu_2day, era5_1990_1995, "t2m", title="Pangu 2-day Mean 2mT Difference (1990-1995)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_1990_1995_mean")
-pangu_mean_diff_1985_1990_2day, pangu_total_diff_1985_1990_2day = plot_comparison(pangu_2day, era5_1985_1990, "t2m", title="Pangu 2-day Mean 2mT Difference (1985-1990)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_1985_1990_mean")
-pangu_mean_diff_1980_1985_2day, pangu_total_diff_1980_1985_2day = plot_comparison(pangu_2day, era5_1980_1985, "t2m", title="Pangu 2-day Mean 2mT Difference (1980-1985)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_1980_1985_mean")
+p_vals_fourcast_0_2day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/fourcast_2day_p_values_0.npy") * land_mask_coarsened.values
 
+p_vals_fourcast_0_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/fourcast_9day_p_values_0.npy") * land_mask_coarsened.values
 
+p_vals_pangu_0_2day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/pangu_2day_p_values_0.npy")* land_mask_coarsened.values
+p_vals_pangu_0_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/pangu_9day_p_values_0.npy")* land_mask_coarsened.values
 
+p_vals_fourcast_10_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/fourcast_9day_p_values_10.npy")* land_mask_coarsened.values
+p_vals_fourcast_90_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/fourcast_9day_p_values_90.npy")* land_mask_coarsened.values
+p_vals_fourcast_80_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/fourcast_9day_p_values_80.npy")* land_mask_coarsened.values
+p_vals_fourcast_20_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/fourcast_9day_p_values_20.npy")* land_mask_coarsened.values
+p_vals_fourcast_95_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/fourcast_9day_p_values_95.npy")* land_mask_coarsened.values
+p_vals_fourcast_5_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/fourcast_9day_p_values_5.npy")* land_mask_coarsened.values
 
-print("forcast_diff")
-# print(mean_diff_2020_2025)
-# #save this
+p_vals_pangu_10_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/pangu_9day_p_values_10.npy") * land_mask_coarsened.values
+p_vals_pangu_90_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/pangu_9day_p_values_90.npy") * land_mask_coarsened.values
+p_vals_pangu_80_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/pangu_9day_p_values_80.npy") * land_mask_coarsened.values
+p_vals_pangu_20_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/pangu_9day_p_values_20.npy") * land_mask_coarsened.values
+p_vals_pangu_95_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/pangu_9day_p_values_95.npy") * land_mask_coarsened.values
+p_vals_pangu_5_9day = np.load("/home/jlandsbe/ai_weather_to_climate_ats780A8/ai2ace/sig_data/pangu_9day_p_values_5.npy") * land_mask_coarsened.values
 
+#recomment
 
+# mean_diff_2020_2025, total_diff_2020_2025 = plot_comparison(fourcast_9day, era5_2020_2025, "t2m", title="FourCastNet 9-day", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2020_2025_mean", pvals = p_vals_fourcast_0_9day)
+# mean_diff_2015_2020, total_diff_2015_2020 = plot_comparison(fourcast_9day, era5_2015_2020, "t2m", title="FourCastNet 9-day Mean 2mT Difference (2015-2020)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2015_2020_mean")
+# mean_diff_2010_2015, total_diff_2010_2015 = plot_comparison(fourcast_9day, era5_2010_2015, "t2m", title="FourCastNet 9-day Mean 2mT Difference (2010-2015)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2010_2015_mean", pvals = p_vals_fourcast_0_9day)
+# mean_diff_2005_2010, total_diff_2005_2010 = plot_comparison(fourcast_9day, era5_2005_2010, "t2m", title="FourCastNet 9-day Mean 2mT Difference (2005-2010)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2005_2010_mean", pvals = p_vals_fourcast_0_9day)
+# mean_diff_2000_2005, total_diff_2000_2005 = plot_comparison(fourcast_9day, era5_2000_2005, "t2m", title="FourCastNet 9-day Mean 2mT Difference (2000-2005)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_2000_2005_mean", pvals = p_vals_fourcast_0_9day)
+# mean_diff_1995_2000, total_diff_1995_2000 = plot_comparison(fourcast_9day, era5_1995_2000, "t2m", title="FourCastNet 9-day Mean 2mT Difference (1995-2000)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_1995_2000_mean", pvals = p_vals_fourcast_0_9day)
+# mean_diff_1990_1995, total_diff_1990_1995 = plot_comparison(fourcast_9day, era5_1990_1995, "t2m", title="FourCastNet 9-day Mean 2mT Difference (1990-1995)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_1990_1995_mean", pvals = p_vals_fourcast_0_9day)
+# mean_diff_1985_1990, total_diff_1985_1990 = plot_comparison(fourcast_9day, era5_1985_1990, "t2m", title="FourCastNet 9-day Mean 2mT Difference (1985-1990)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_1985_1990_mean", pvals = p_vals_fourcast_0_9day)
+# mean_diff_1980_1985, total_diff_1980_1985 = plot_comparison(fourcast_9day, era5_1980_1985, "t2m", title="FourCastNet 9-day Mean 2mT Difference (1980-1985)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day_1980_1985_mean", pvals = p_vals_fourcast_0_9day)
 
-# #2day
-mean_diff_2020_2025_2day, total_diff_2020_2025_2day = plot_comparison(fourcast_2day, era5_2020_2025, "t2m", title="FourCastNet 2-day", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2020_2025_mean")
-mean_diff_2015_2020_2day, total_diff_2015_2020_2day = plot_comparison(fourcast_2day, era5_2015_2020, "t2m", title="FourCastNet Mean 2mT Difference (2015-2020)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2015_2020_mean")
-mean_diff_2010_2015_2day, total_diff_2010_2015_2day = plot_comparison(fourcast_2day, era5_2010_2015, "t2m", title="FourCastNet Mean 2mT Difference (2010-2015)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2010_2015_mean")
-mean_diff_2005_2010_2day, total_diff_2005_2010_2day = plot_comparison(fourcast_2day, era5_2005_2010, "t2m", title="FourCastNet Mean 2mT Difference (2005-2010)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2005_2010_mean")
-mean_diff_2000_2005_2day, total_diff_2000_2005_2day = plot_comparison(fourcast_2day, era5_2000_2005, "t2m", title="FourCastNet Mean 2mT Difference (2000-2005)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2000_2005_mean")
-mean_diff_1995_2000_2day, total_diff_1995_2000_2day = plot_comparison(fourcast_2day, era5_1995_2000, "t2m", title="FourCastNet Mean 2mT Difference (1995-2000)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_1995_2000_mean")
-mean_diff_1990_1995_2day, total_diff_1990_1995_2day = plot_comparison(fourcast_2day, era5_1990_1995, "t2m", title="FourCastNet Mean 2mT Difference (1990-1995)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_1990_1995_mean")
-mean_diff_1985_1990_2day, total_diff_1985_1990_2day = plot_comparison(fourcast_2day, era5_1985_1990, "t2m", title="FourCastNet 2-day Mean 2mT Difference (1985-1990)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_1985_1990_mean")
-mean_diff_1980_1985_2day, total_diff_1980_1985_2day = plot_comparison(fourcast_2day, era5_1980_1985, "t2m", title="FourCastNet 2-day Mean 2mT Difference (1980-1985)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_1980_1985_mean")
+# # Pangu 9-day lead comparisons
+# pangu_mean_diff_2020_2025, pangu_total_diff_2020_2025 = plot_comparison(pangu_9day, era5_2020_2025, "t2m", title="Pangu 9-day", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2020_2025_mean", pvals = p_vals_pangu_0_9day)
+# pangu_mean_diff_2015_2020, pangu_total_diff_2015_2020 = plot_comparison(pangu_9day, era5_2015_2020, "t2m", title="Pangu 9-day Mean 2mT Difference (2015-2020)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2015_2020_mean")
+# pangu_mean_diff_2010_2015, pangu_total_diff_2010_2015 = plot_comparison(pangu_9day, era5_2010_2015, "t2m", title="Pangu 9-day Mean 2mT Difference (2010-2015)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2010_2015_mean")
+# pangu_mean_diff_2005_2010, pangu_total_diff_2005_2010 = plot_comparison(pangu_9day, era5_2005_2010, "t2m", title="Pangu 9-day Mean 2mT Difference (2005-2010)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2005_2010_mean")
+# pangu_mean_diff_2000_2005, pangu_total_diff_2000_2005 = plot_comparison(pangu_9day, era5_2000_2005, "t2m", title="Pangu 9-day Mean 2mT Difference (2000-2005)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_2000_2005_mean")
+# pangu_mean_diff_1995_2000, pangu_total_diff_1995_2000 = plot_comparison(pangu_9day, era5_1995_2000, "t2m", title="Pangu 9-day Mean 2mT Difference (1995-2000)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_1995_2000_mean", pvals = p_vals_pangu_0_9day)
+# pangu_mean_diff_1990_1995, pangu_total_diff_1990_1995 = plot_comparison(pangu_9day, era5_1990_1995, "t2m", title="Pangu 9-day Mean 2mT Difference (1990-1995)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_1990_1995_mean", pvals = p_vals_pangu_0_9day)
+# pangu_mean_diff_1985_1990, pangu_total_diff_1985_1990 = plot_comparison(pangu_9day, era5_1985_1990, "t2m", title="Pangu 9-day Mean 2mT Difference (1985-1990)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_1985_1990_mean", pvals = p_vals_pangu_0_9day)
+# pangu_mean_diff_1980_1985, pangu_total_diff_1980_1985 = plot_comparison(pangu_9day, era5_1980_1985, "t2m", title="Pangu 9-day Mean 2mT Difference (1980-1985)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day_1980_1985_mean", pvals = p_vals_pangu_0_9day)
 
-
-xlabels = ["1980-1985", "1985-1990", "1990-1995", "1995-2000", "2000-2005", "2005-2010", "2010-2015", "2015-2020", "2020-2025"]
-ydata_fourcast = [total_diff_1980_1985, total_diff_1985_1990, total_diff_1990_1995, total_diff_1995_2000, total_diff_2000_2005, total_diff_2005_2010, total_diff_2010_2015, total_diff_2015_2020, total_diff_2020_2025]
-ydata_pangu_9_day = [total_diff_1980_1985, total_diff_1985_1990, total_diff_1990_1995, total_diff_1995_2000, total_diff_2000_2005, total_diff_2005_2010, total_diff_2010_2015, total_diff_2015_2020, total_diff_2020_2025]
-time_series_plot(xlabels, ydata_fourcast, ylabel="Mean Difference (K)", title="2-Day Lead Absolute Global Mean Temperature Difference", tag="time_series_mean_diff_abs", abs=1, vmax=1, y_data2 = ydata_pangu_9_day)
-
-da_list_pangu = [pangu_mean_diff_1980_1985, pangu_mean_diff_1985_1990, pangu_mean_diff_1990_1995,
-           pangu_mean_diff_1995_2000, pangu_mean_diff_2000_2005, pangu_mean_diff_2005_2010,
-           pangu_mean_diff_2010_2015, pangu_mean_diff_2015_2020, pangu_mean_diff_2020_2025]
-
-da_list_2day_pangu = [pangu_mean_diff_1980_1985_2day, pangu_mean_diff_1985_1990_2day, pangu_mean_diff_1990_1995_2day,
-               pangu_mean_diff_1995_2000_2day, pangu_mean_diff_2000_2005_2day, pangu_mean_diff_2005_2010_2day,
-               pangu_mean_diff_2010_2015_2day, pangu_mean_diff_2015_2020_2day, pangu_mean_diff_2020_2025_2day]
+# # Pangu 2-day lead comparisons
+# pangu_mean_diff_2020_2025_2day, pangu_total_diff_2020_2025_2day = plot_comparison(pangu_2day, era5_2020_2025, "t2m", title="Pangu 2-day", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2020_2025_mean", pvals= p_vals_pangu_0_2day)
+# pangu_mean_diff_2015_2020_2day, pangu_total_diff_2015_2020_2day = plot_comparison(pangu_2day, era5_2015_2020, "t2m", title="Pangu 2-day Mean 2mT Difference (2015-2020)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2015_2020_mean", pvals= p_vals_pangu_0_2day)
+# pangu_mean_diff_2010_2015_2day, pangu_total_diff_2010_2015_2day = plot_comparison(pangu_2day, era5_2010_2015, "t2m", title="Pangu 2-day Mean 2mT Difference (2010-2015)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2010_2015_mean")
+# pangu_mean_diff_2005_2010_2day, pangu_total_diff_2005_2010_2day = plot_comparison(pangu_2day, era5_2005_2010, "t2m", title="Pangu 2-day Mean 2mT Difference (2005-2010)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2005_2010_mean")
+# pangu_mean_diff_2000_2005_2day, pangu_total_diff_2000_2005_2day = plot_comparison(pangu_2day, era5_2000_2005, "t2m", title="Pangu 2-day Mean 2mT Difference (2000-2005)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_2000_2005_mean")
+# pangu_mean_diff_1995_2000_2day, pangu_total_diff_1995_2000_2day = plot_comparison(pangu_2day, era5_1995_2000, "t2m", title="Pangu 2-day Mean 2mT Difference (1995-2000)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_1995_2000_mean")
+# pangu_mean_diff_1990_1995_2day, pangu_total_diff_1990_1995_2day = plot_comparison(pangu_2day, era5_1990_1995, "t2m", title="Pangu 2-day Mean 2mT Difference (1990-1995)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_1990_1995_mean")
+# pangu_mean_diff_1985_1990_2day, pangu_total_diff_1985_1990_2day = plot_comparison(pangu_2day, era5_1985_1990, "t2m", title="Pangu 2-day Mean 2mT Difference (1985-1990)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_1985_1990_mean")
+# pangu_mean_diff_1980_1985_2day, pangu_total_diff_1980_1985_2day = plot_comparison(pangu_2day, era5_1980_1985, "t2m", title="Pangu 2-day Mean 2mT Difference (1980-1985)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_2day_1980_1985_mean")
 
 
 
 
-
-#Assume you have a list of DataArrays with the same lat/lon dims
-#Stack them into a new dimension, e.g., 'index'
-stacked = xr.concat(da_list_2day_pangu, dim='index')
-stacked = np.abs(stacked)
+# print("forcast_diff")
+# # print(mean_diff_2020_2025)
+# # #save this
 
 
-# Create mask where all values are NaN at each gridpoint
-all_nan_mask = stacked.isnull().all(dim='index')
 
-# Fill NaNs with +inf before calling argmin (inf will never be selected unless all are inf)
-stacked_filled = stacked.fillna(np.inf)
-
-# Compute argmin safely
-min_index = stacked_filled.argmin(dim='index')
-
-# Set index to NaN where all were NaN
-min_index = min_index.where(~all_nan_mask)
-
-plot_emd_years(min_index, variable="t2m", title="Pangu 2-day",
-               maskout=keep_land_mask, vmin=0, vmax=8, tag="pangu_best_matching_time_period_t2m_2day")
-
-#Assume you have a list of DataArrays with the same lat/lon dims
-#Stack them into a new dimension, e.g., 'index'
-stacked = xr.concat(da_list_pangu, dim='index')
-stacked = np.abs(stacked)
+# # #2day
+# mean_diff_2020_2025_2day, total_diff_2020_2025_2day = plot_comparison(fourcast_2day, era5_2020_2025, "t2m", title="FourCastNet 2-day", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2020_2025_mean", pvals= p_vals_fourcast_0_2day)
+# mean_diff_2015_2020_2day, total_diff_2015_2020_2day = plot_comparison(fourcast_2day, era5_2015_2020, "t2m", title="FourCastNet Mean 2mT Difference (2015-2020)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2015_2020_mean", pvals= p_vals_fourcast_0_2day)
+# mean_diff_2010_2015_2day, total_diff_2010_2015_2day = plot_comparison(fourcast_2day, era5_2010_2015, "t2m", title="FourCastNet Mean 2mT Difference (2010-2015)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2010_2015_mean", pvals= p_vals_fourcast_0_2day)
+# mean_diff_2005_2010_2day, total_diff_2005_2010_2day = plot_comparison(fourcast_2day, era5_2005_2010, "t2m", title="FourCastNet Mean 2mT Difference (2005-2010)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2005_2010_mean", pvals= p_vals_fourcast_0_2day)
+# mean_diff_2000_2005_2day, total_diff_2000_2005_2day = plot_comparison(fourcast_2day, era5_2000_2005, "t2m", title="FourCastNet Mean 2mT Difference (2000-2005)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_2000_2005_mean", pvals= p_vals_fourcast_0_2day)
+# mean_diff_1995_2000_2day, total_diff_1995_2000_2day = plot_comparison(fourcast_2day, era5_1995_2000, "t2m", title="FourCastNet Mean 2mT Difference (1995-2000)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_1995_2000_mean", pvals= p_vals_fourcast_0_2day)
+# mean_diff_1990_1995_2day, total_diff_1990_1995_2day = plot_comparison(fourcast_2day, era5_1990_1995, "t2m", title="FourCastNet Mean 2mT Difference (1990-1995)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_1990_1995_mean", pvals= p_vals_fourcast_0_2day)
+# mean_diff_1985_1990_2day, total_diff_1985_1990_2day = plot_comparison(fourcast_2day, era5_1985_1990, "t2m", title="FourCastNet 2-day Mean 2mT Difference (1985-1990)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_1985_1990_mean", pvals= p_vals_fourcast_0_2day)
+# mean_diff_1980_1985_2day, total_diff_1980_1985_2day = plot_comparison(fourcast_2day, era5_1980_1985, "t2m", title="FourCastNet 2-day Mean 2mT Difference (1980-1985)", maskout = keep_land_mask,vmin=-2, vmax=2, tag="2day_1980_1985_mean", pvals= p_vals_fourcast_0_2day)
 
 
-# Create mask where all values are NaN at each gridpoint
-all_nan_mask = stacked.isnull().all(dim='index')
+# xlabels = ["1980-1985", "1985-1990", "1990-1995", "1995-2000", "2000-2005", "2005-2010", "2010-2015", "2015-2020", "2020-2025"]
+# ydata_fourcast = [total_diff_1980_1985, total_diff_1985_1990, total_diff_1990_1995, total_diff_1995_2000, total_diff_2000_2005, total_diff_2005_2010, total_diff_2010_2015, total_diff_2015_2020, total_diff_2020_2025]
+# ydata_pangu_9_day = [total_diff_1980_1985, total_diff_1985_1990, total_diff_1990_1995, total_diff_1995_2000, total_diff_2000_2005, total_diff_2005_2010, total_diff_2010_2015, total_diff_2015_2020, total_diff_2020_2025]
+# time_series_plot(xlabels, ydata_fourcast, ylabel="Mean Difference (K)", title="2-Day Lead Absolute Global Mean Temperature Difference", tag="time_series_mean_diff_abs", abs=1, vmax=1, y_data2 = ydata_pangu_9_day)
 
-# Fill NaNs with +inf before calling argmin (inf will never be selected unless all are inf)
-stacked_filled = stacked.fillna(np.inf)
+# da_list_pangu = [pangu_mean_diff_1980_1985, pangu_mean_diff_1985_1990, pangu_mean_diff_1990_1995,
+#            pangu_mean_diff_1995_2000, pangu_mean_diff_2000_2005, pangu_mean_diff_2005_2010,
+#            pangu_mean_diff_2010_2015, pangu_mean_diff_2015_2020, pangu_mean_diff_2020_2025]
 
-# Compute argmin safely
-min_index = stacked_filled.argmin(dim='index')
-
-# Set index to NaN where all were NaN
-min_index = min_index.where(~all_nan_mask)
-
-plot_emd_years(min_index, variable="t2m", title="Pangu 9-day",
-               maskout=keep_land_mask, vmin=0, vmax=8, tag="pangu_best_matching_time_period_t2m_9day")
-
-
-da_list = [mean_diff_1980_1985, mean_diff_1985_1990, mean_diff_1990_1995,
-           mean_diff_1995_2000, mean_diff_2000_2005, mean_diff_2005_2010,
-           mean_diff_2010_2015, mean_diff_2015_2020, mean_diff_2020_2025]
-
-da_list_2day = [mean_diff_1980_1985_2day, mean_diff_1985_1990_2day, mean_diff_1990_1995_2day,
-               mean_diff_1995_2000_2day, mean_diff_2000_2005_2day, mean_diff_2005_2010_2day,
-               mean_diff_2010_2015_2day, mean_diff_2015_2020_2day, mean_diff_2020_2025_2day]
+# da_list_2day_pangu = [pangu_mean_diff_1980_1985_2day, pangu_mean_diff_1985_1990_2day, pangu_mean_diff_1990_1995_2day,
+#                pangu_mean_diff_1995_2000_2day, pangu_mean_diff_2000_2005_2day, pangu_mean_diff_2005_2010_2day,
+#                pangu_mean_diff_2010_2015_2day, pangu_mean_diff_2015_2020_2day, pangu_mean_diff_2020_2025_2day]
 
 
 
 
 
-#Assume you have a list of DataArrays with the same lat/lon dims
-#Stack them into a new dimension, e.g., 'index'
-stacked = xr.concat(da_list_2day, dim='index')
-stacked = np.abs(stacked)
+# #Assume you have a list of DataArrays with the same lat/lon dims
+# #Stack them into a new dimension, e.g., 'index'
+# stacked = xr.concat(da_list_2day_pangu, dim='index')
+# stacked = np.abs(stacked)
 
 
-# Create mask where all values are NaN at each gridpoint
-all_nan_mask = stacked.isnull().all(dim='index')
+# # Create mask where all values are NaN at each gridpoint
+# all_nan_mask = stacked.isnull().all(dim='index')
 
-# Fill NaNs with +inf before calling argmin (inf will never be selected unless all are inf)
-stacked_filled = stacked.fillna(np.inf)
+# # Fill NaNs with +inf before calling argmin (inf will never be selected unless all are inf)
+# stacked_filled = stacked.fillna(np.inf)
 
-# Compute argmin safely
-min_index = stacked_filled.argmin(dim='index')
+# # Compute argmin safely
+# min_index = stacked_filled.argmin(dim='index')
 
-# Set index to NaN where all were NaN
-min_index = min_index.where(~all_nan_mask)
+# # Set index to NaN where all were NaN
+# min_index = min_index.where(~all_nan_mask)
 
-plot_emd_years(min_index, variable="t2m", title="FourCastNet 2-day",
-               maskout=keep_land_mask, vmin=0, vmax=8, tag="fourcastnet_best_matching_time_period_t2m_2day")
+# plot_emd_years(min_index, variable="t2m", title="Pangu 2-day",
+#                maskout=keep_land_mask, vmin=0, vmax=8, tag="pangu_best_matching_time_period_t2m_2day", pvals= p_vals_pangu_0_2day)
 
-#Assume you have a list of DataArrays with the same lat/lon dims
-#Stack them into a new dimension, e.g., 'index'
-stacked = xr.concat(da_list, dim='index')
-stacked = np.abs(stacked)
-
-
-# Create mask where all values are NaN at each gridpoint
-all_nan_mask = stacked.isnull().all(dim='index')
-
-# Fill NaNs with +inf before calling argmin (inf will never be selected unless all are inf)
-stacked_filled = stacked.fillna(np.inf)
-
-# Compute argmin safely
-min_index = stacked_filled.argmin(dim='index')
-
-# Set index to NaN where all were NaN
-min_index = min_index.where(~all_nan_mask)
-
-plot_emd_years(min_index, variable="t2m", title="FourCastNet 9-day",
-               maskout=keep_land_mask, vmin=0, vmax=8, tag="fourcastnet_best_matching_time_period_t2m_9day")
+# #Assume you have a list of DataArrays with the same lat/lon dims
+# #Stack them into a new dimension, e.g., 'index'
+# stacked = xr.concat(da_list_pangu, dim='index')
+# stacked = np.abs(stacked)
 
 
+# # Create mask where all values are NaN at each gridpoint
+# all_nan_mask = stacked.isnull().all(dim='index')
+
+# # Fill NaNs with +inf before calling argmin (inf will never be selected unless all are inf)
+# stacked_filled = stacked.fillna(np.inf)
+
+# # Compute argmin safely
+# min_index = stacked_filled.argmin(dim='index')
+
+# # Set index to NaN where all were NaN
+# min_index = min_index.where(~all_nan_mask)
+
+# plot_emd_years(min_index, variable="t2m", title="Pangu 9-day",
+#                maskout=keep_land_mask, vmin=0, vmax=8, tag="pangu_best_matching_time_period_t2m_9day", pvals= p_vals_pangu_0_9day)
+
+
+# da_list = [mean_diff_1980_1985, mean_diff_1985_1990, mean_diff_1990_1995,
+#            mean_diff_1995_2000, mean_diff_2000_2005, mean_diff_2005_2010,
+#            mean_diff_2010_2015, mean_diff_2015_2020, mean_diff_2020_2025]
+
+# da_list_2day = [mean_diff_1980_1985_2day, mean_diff_1985_1990_2day, mean_diff_1990_1995_2day,
+#                mean_diff_1995_2000_2day, mean_diff_2000_2005_2day, mean_diff_2005_2010_2day,
+#                mean_diff_2010_2015_2day, mean_diff_2015_2020_2day, mean_diff_2020_2025_2day]
 
 
 
 
 
+# #Assume you have a list of DataArrays with the same lat/lon dims
+# #Stack them into a new dimension, e.g., 'index'
+# stacked = xr.concat(da_list_2day, dim='index')
+# stacked = np.abs(stacked)
 
-plot_comparison(fourcast_9day, era5_2020_2025, "t2m", title="FourCastNet 9-day Mean 2m Temperature Difference", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day")
-plot_comparison(fourcast_2day, era5_2020_2025, "t2m", title="FourCastNet 2-day Mean 2m Temperature Difference", maskout = keep_land_mask, vmin=-2, vmax=2, tag="2day")
 
-plot_comparison(pangu_9day, era5_2020_2025, "t2m", title="Pangu 9-day Mean 2m Temperature Difference", maskout = keep_land_mask,vmin=-2, vmax=2, tag="9day")
-plot_comparison(pangu_2day, era5_2020_2025, "t2m", title="Pangu 2-day Mean 2m Temperature Difference", maskout = keep_land_mask, vmin=-2, vmax=2, tag="2day")
+# # Create mask where all values are NaN at each gridpoint
+# all_nan_mask = stacked.isnull().all(dim='index')
+
+# # Fill NaNs with +inf before calling argmin (inf will never be selected unless all are inf)
+# stacked_filled = stacked.fillna(np.inf)
+
+# # Compute argmin safely
+# min_index = stacked_filled.argmin(dim='index')
+
+# # Set index to NaN where all were NaN
+# min_index = min_index.where(~all_nan_mask)
+
+# plot_emd_years(min_index, variable="t2m", title="FourCastNet 2-day",
+#                maskout=keep_land_mask, vmin=0, vmax=8, tag="fourcastnet_best_matching_time_period_t2m_2day", pvals= p_vals_fourcast_0_2day)
+
+# #Assume you have a list of DataArrays with the same lat/lon dims
+# #Stack them into a new dimension, e.g., 'index'
+# stacked = xr.concat(da_list, dim='index')
+# stacked = np.abs(stacked)
+
+
+# # Create mask where all values are NaN at each gridpoint
+# all_nan_mask = stacked.isnull().all(dim='index')
+
+# # Fill NaNs with +inf before calling argmin (inf will never be selected unless all are inf)
+# stacked_filled = stacked.fillna(np.inf)
+
+# # Compute argmin safely
+# min_index = stacked_filled.argmin(dim='index')
+
+# # Set index to NaN where all were NaN
+# min_index = min_index.where(~all_nan_mask)
+
+# plot_emd_years(min_index, variable="t2m", title="FourCastNet 9-day",
+#                maskout=keep_land_mask, vmin=0, vmax=8, tag="fourcastnet_best_matching_time_period_t2m_9day", pvals= p_vals_fourcast_0_9day)
+
+
+
+
+
+##recomment
+
+
+plot_comparison(fourcast_9day, era5_2020_2025, "t2m", title="FourCastNet 9-day Mean 2m Temperature Difference", maskout = keep_land_mask,vmin=-2, vmax=2, tag="fourcast_9day", pvals= p_vals_fourcast_0_9day)
+plot_comparison(fourcast_2day, era5_2020_2025, "t2m", title="FourCastNet 2-day Mean 2m Temperature Difference", maskout = keep_land_mask, vmin=-2, vmax=2, tag="fourcast_2day", pvals= p_vals_fourcast_0_2day)
+
+plot_comparison(pangu_9day, era5_2020_2025, "t2m", title="Pangu 9-day Mean 2m Temperature Difference", maskout = keep_land_mask,vmin=-2, vmax=2, tag="pangu_9day", pvals= p_vals_pangu_0_9day)
+plot_comparison(pangu_2day, era5_2020_2025, "t2m", title="Pangu 2-day Mean 2m Temperature Difference", maskout = keep_land_mask, vmin=-2, vmax=2, tag="pangu_2day", pvals= p_vals_pangu_0_2day)
 
 mean = 0
 fourcast_color="#FE5F55"
@@ -917,8 +1024,10 @@ for perc in [(5,95), (10,90), (20,80)]:
                     bbox_inches='tight', dpi=300)
 
     mean = 0
-    lat_min, lat_max = 30, 35
-    lon_min, lon_max = 260, 270
+    lat_min, lat_max = 33, 38
+    lon_min, lon_max = 265, 273
+    # lat_min, lat_max = 25, 42
+    # lon_min, lon_max = 265, 290
     # Subset to lat-lon box
     era5_box = era5_2020_2025.t2m.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
     fourcast_box = fourcast_9day.t2m.sel(latitude=slice(lat_max, lat_min), longitude=slice(lon_min, lon_max))
@@ -1006,13 +1115,14 @@ for perc in [(5,95), (10,90), (20,80)]:
                 plt.text(val + add_bit, 0, label, color=color, rotation=90,
                 ha='left', va='bottom', fontsize=10, fontweight='bold')
         elif label[0:4]=="Pang" and val == p10_pangu:
-            plt.text(val - 5*add_bit, 0, label, color=color, rotation=90,
+            plt.text(val -.8, 0, label, color=color, rotation=90,
             ha='left', va='bottom', fontsize=10, fontweight='bold')
 
         else:
             plt.text(val + add_bit, 0, label, color=color, rotation=90,
                 ha='left', va='bottom', fontsize=10, fontweight='bold')
 
+    plt.xlim(left=268)  # lower limit only
 
     # Labels and legend
     plt.xlabel('Temperatures (K)')
@@ -1081,10 +1191,10 @@ pangu_9day_t2m_10th = percentile_filtering_by_season(pangu_9day.t2m, percentile=
 fourcast_9day_t2m_90th = percentile_filtering_by_season(fourcast_9day.t2m, percentile=90)
 pangu_9day_t2m_90th = percentile_filtering_by_season(pangu_9day.t2m, percentile=90)
 era5_2020_2025_t2m_90th = percentile_filtering_by_season(era5_2020_2025.t2m, percentile=90)
-plot_comparison(fourcast_9day_t2m_10th, era5_2020_2025_t2m_10th, "t2m", title="FourCastNet 9-day 10th Percentile", maskout = keep_land_mask, vmin=-2, vmax=2, tag="fourcast_9day_10th")
-plot_comparison(fourcast_9day_t2m_90th, era5_2020_2025_t2m_90th, "t2m", title="FourCastNet 9-day 90th Percentile", maskout = keep_land_mask, vmin=-2, vmax=2, tag="fourcast_9day_90th")
-plot_comparison(pangu_9day_t2m_10th, era5_2020_2025_t2m_10th, "t2m", title="Pangu 9-day 10th Percentile", maskout = keep_land_mask, vmin=-2, vmax=2, tag="pangu_9day_10th")
-plot_comparison(pangu_9day_t2m_90th, era5_2020_2025_t2m_90th, "t2m", title="Pangu 9-day 90th Percentile", maskout = keep_land_mask, vmin=-2, vmax=2, tag="pangu_9day_90th")
+plot_comparison(fourcast_9day_t2m_10th, era5_2020_2025_t2m_10th, "t2m", title="FourCastNet 9-day 10th Percentile", maskout = keep_land_mask, vmin=-2, vmax=2, tag="fourcast_9day_10th", pvals= p_vals_fourcast_10_9day)
+plot_comparison(fourcast_9day_t2m_90th, era5_2020_2025_t2m_90th, "t2m", title="FourCastNet 9-day 90th Percentile", maskout = keep_land_mask, vmin=-2, vmax=2, tag="fourcast_9day_90th", pvals= p_vals_fourcast_90_9day)
+plot_comparison(pangu_9day_t2m_10th, era5_2020_2025_t2m_10th, "t2m", title="Pangu 9-day 10th Percentile", maskout = keep_land_mask, vmin=-2, vmax=2, tag="pangu_9day_10th", pvals= p_vals_pangu_10_9day)
+plot_comparison(pangu_9day_t2m_90th, era5_2020_2025_t2m_90th, "t2m", title="Pangu 9-day 90th Percentile", maskout = keep_land_mask, vmin=-2, vmax=2, tag="pangu_9day_90th", pvals= p_vals_pangu_90_9day)
 
 
 # Repeat for -5 to -80 (by 5) and 50 to 95 (by 5)
@@ -1092,27 +1202,31 @@ plot_comparison(pangu_9day_t2m_90th, era5_2020_2025_t2m_90th, "t2m", title="Pang
 highlight_boxes = [
     (33, 38, 263, 273),   # SE US: lat_min, lat_max, lon_min, lon_max
 ]
+highlight_boxes = [(25, 42, 265, 290),(33, 38, 265, 273)]  # Updated to cover larger SE US region
 
-for perc in [-5, -10, -20]:
+
+for i, perc in enumerate([-5, -10, -20]):
     era5_perc = percentile_filtering_by_season(era5_2020_2025.t2m, percentile=perc)
     fourcast_perc = percentile_filtering_by_season(fourcast_9day.t2m, percentile=perc)
     tag = f"FourCastNet_9day_{abs(perc)}th_below"
+    pvals = [p_vals_fourcast_5_9day, p_vals_fourcast_10_9day, p_vals_fourcast_20_9day]
     _, mean_diff = plot_comparison(
         fourcast_perc, era5_perc, "t2m",
         title=f"FourCastNet 9-day {abs(perc)}th Percentile and Below",
-        highlight_box=None,
-        maskout=keep_land_mask, vmin=-2, vmax=2, tag=tag+"_nobox"
+        highlight_box=highlight_boxes,
+        maskout=keep_land_mask, vmin=-2, vmax=2, tag=tag, pvals=pvals[i]
     )
 
-for perc in [95,90,80]:
+for i, perc in enumerate([95,90,80]):
     era5_perc = percentile_filtering_by_season(era5_2020_2025.t2m, percentile=perc)
     fourcast_perc = percentile_filtering_by_season(fourcast_9day.t2m, percentile=perc)
     tag = f"FourCastNet_9day_{perc}th_above"
+    pvals = [p_vals_fourcast_95_9day, p_vals_fourcast_90_9day, p_vals_fourcast_80_9day]
     _, mean_diff = plot_comparison(
         fourcast_perc, era5_perc, "t2m",
-        title=f"FourCastNet 9-day {perc}th Percentile and Above", highlight_box=None,
-        maskout=keep_land_mask, vmin=-2, vmax=2, tag=tag+"_nobox"
-    ) 
+        title=f"FourCastNet 9-day {perc}th Percentile and Above", highlight_box=highlight_boxes,
+        maskout=keep_land_mask, vmin=-2, vmax=2, tag=tag, pvals=pvals[i]
+    )
 
 #as extreme for below percentiles
 # Load the datasets for extreme percentiles
@@ -1134,24 +1248,27 @@ for perc in [95,90,80]:
 
 
 # Repeat for -5 to -80 (by 5) and 50 to 95 (by 5)
-for perc in [-5,-10,-20]:
+for j, perc in enumerate([-5,-10,-20]):
     era5_perc = percentile_filtering_by_season(era5_2020_2025.t2m, percentile=perc)
     pangu_perc = percentile_filtering_by_season(pangu_9day.t2m, percentile=perc)
     tag = f"Pangu_9day_{abs(perc)}th_below"
+    pvals = [p_vals_pangu_5_9day, p_vals_pangu_10_9day, p_vals_pangu_20_9day]
     _, mean_diff = plot_comparison(
         pangu_perc, era5_perc, "t2m",
-        title=f"Pangu 9-day {abs(perc)}th Percentile and Below", highlight_box=None,
-        maskout=keep_land_mask, vmin=-2, vmax=2, tag=tag+"_nobox"
+        title=f"Pangu 9-day {abs(perc)}th Percentile and Below", highlight_box=highlight_boxes,
+        maskout=keep_land_mask, vmin=-2, vmax=2, tag=tag, pvals=pvals[j]
     )
 
-for perc in [95,90,80]:
+for j, perc in enumerate([95,90,80]):
     era5_perc = percentile_filtering_by_season(era5_2020_2025.t2m, percentile=perc)
     pangu_perc = percentile_filtering_by_season(pangu_9day.t2m, percentile=perc)
     tag = f"Pangu_9day_{perc}th_above"
+    pvals = [p_vals_pangu_95_9day, p_vals_pangu_90_9day, p_vals_pangu_80_9day]
+    print(pvals)
     _, mean_diff = plot_comparison(
         pangu_perc, era5_perc, "t2m",
-        title=f"Pangu 9-day  {abs(perc)}th Percentile and Above", highlight_box=None,
-        maskout=keep_land_mask, vmin=-2, vmax=2, tag=tag+"_nobox"
+        title=f"Pangu 9-day {abs(perc)}th Percentile and Above", highlight_box=highlight_boxes,
+        maskout=keep_land_mask, vmin=-2, vmax=2, tag=tag, pvals=pvals[j]
     )
 #as extreme for below percentiles
 # Load the datasets for extreme percentiles
